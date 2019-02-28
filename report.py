@@ -16,12 +16,14 @@ def my_lambda_handler(event, context):
     member_list_prefix = 'Member_List'
     ambulance_report_prefix = 'Ambulance_Response_Report'
     engine_report_prefix = 'Engine_Response_Report'
+    chief_report_prefix = 'Chief_Response_Report'
 
     # Key instantiation for file retrieval from S3 bucket
     station_standby_key = ''
     member_list_key = ''
     ambulance_report_key = ''
     engine_report_key = ''
+    chief_report_key = ''
 
     # Iterate through all objects in the S3 bucket, and set the appropriate key names to the variables
     # instantiated above
@@ -35,6 +37,8 @@ def my_lambda_handler(event, context):
             ambulance_report_key = key
         elif key.startswith(engine_report_prefix):
             engine_report_key = key
+        elif key.startswith(chief_report_prefix):
+            chief_report_key = key
 
     # Get station standby csv from S3 bucket
     station_standby_obj = s3.get_object(Bucket=S3_BUCKET, Key=station_standby_key)
@@ -52,11 +56,16 @@ def my_lambda_handler(event, context):
     engine_report_obj = s3.get_object(Bucket=S3_BUCKET, Key=engine_report_key)
     engine_response_report = pd.read_csv(engine_report_obj['Body'], header=1)
 
+    # Get chief response report csv from S3 bucket
+    chief_report_obj = s3.get_object(Bucket=S3_BUCKET, Key=chief_report_key)
+    chief_response_report = pd.read_csv(chief_report_obj['Body'], header=1)
+
     # Initialize the dictionaries to map members to their appropriate statistics
     member_hours_dict = {}
     member_incentive_due_dict = {}
     member_ambulance_calls_dict = {}
     member_engine_calls_dict = {}
+    member_chief_calls_dict = {}
 
     # Iterate through member list and initialize all members with 0 stats
     for index, row in member_list.iterrows():
@@ -68,13 +77,15 @@ def my_lambda_handler(event, context):
             member_ambulance_calls_dict[row.loc['Member']] = 0
         if row.loc['Member'] not in member_engine_calls_dict:
             member_engine_calls_dict[row.loc['Member']] = 0
-            
+        if row.loc['Member'] not in member_chief_calls_dict:
+            member_chief_calls_dict[row.loc['Member']] = 0
+
     # Iterate through station standby report and calculate total hours volunteered by each member
     for index2, row in station_standby_report.iterrows():
         member_hours_dict[row.loc['Submitted By']] += row.loc['Total Number of Hours']
 
     # Iterate through ambulance response report and calculate total ambulance incentive and
-    # ambulance calls taken each member
+    # ambulance calls taken by each member
     for index3, row in ambulance_response_report.iterrows():
         if row.loc['Transport'] == 'No':
             member_incentive_due_dict[row.loc['Driver']] += 5
@@ -93,7 +104,7 @@ def my_lambda_handler(event, context):
         if not (pd.isnull(row.loc['Additional Crew'])):
             member_ambulance_calls_dict[row.loc['Additional Crew']] += 1
 
-    # Iterate through engine response report and calculate total engine incentive and engine calls taken each member
+    # Iterate through engine response report and calculate total engine incentive and engine calls taken by each member
     for index4, row in engine_response_report.iterrows():
         member_incentive_due_dict[row.loc['Driver']] += 5
         member_incentive_due_dict[row.loc['Officer-In-Charge']] += 5
@@ -111,12 +122,19 @@ def my_lambda_handler(event, context):
         if not (pd.isnull(row.loc['Observer'])):
             member_engine_calls_dict[row.loc['Observer']] += 1
 
+    # Iterate through chief response report and calculate total chief calls taken by each member
+    for index5, row in chief_response_report.iterrows():
+        member_chief_calls_dict[row.loc['Chief']] += 1
+        if not (pd.isnull(row.loc['Aide'])):
+            member_chief_calls_dict[row.loc['Aide']] += 1
+
     # Initialize member lists and stats for conversion into Python DataFrame
     member_names = []
     member_hours = []
     member_incentive = []
     member_ambulance_calls = []
     member_engine_calls = []
+    member_chief_calls = []
 
     # Add all members and their associated stats into the appropriate list
     for member in member_hours_dict:
@@ -125,6 +143,7 @@ def my_lambda_handler(event, context):
         member_incentive.append(member_incentive_due_dict[member])
         member_ambulance_calls.append(member_ambulance_calls_dict[member])
         member_engine_calls.append(member_engine_calls_dict[member])
+        member_chief_calls.append(member_chief_calls_dict[member])
 
     # Set dictionary for final CSV report labels
     member_hour_final_dict = {
@@ -132,7 +151,8 @@ def my_lambda_handler(event, context):
         'Station Standby Hours Reported': member_hours,
         'Incentive Due': member_incentive,
         'Ambulance Calls Taken': member_ambulance_calls,
-        'Engine Calls Taken': member_engine_calls
+        'Engine Calls Taken': member_engine_calls,
+        'Chief Calls Taken': member_chief_calls
     }
 
     # Get current month for naming the final CSV report
