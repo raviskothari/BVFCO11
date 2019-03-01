@@ -22,12 +22,14 @@ def my_lambda_handler(event, context):
     # Get current year
     current_year = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(1)).year
 
-    # Prefixes for keys in the S3 bucket. This will ignore any date specific file names
+    # Prefixes for keys in the S3 bucket. This will ignore any date specific file names. Add all keys to a list for
+    # deletion after the program has executed
     station_standby_prefix = 'Station_Standby_Record'
     member_list_prefix = 'Member_List'
     ambulance_report_prefix = 'Ambulance_Response_Report'
     engine_report_prefix = 'Engine_Response_Report'
     chief_report_prefix = 'Chief_Response_Report'
+    finished_report_prefix = 'finished'
 
     # Key instantiation for file retrieval from S3 bucket
     station_standby_key = ''
@@ -35,6 +37,8 @@ def my_lambda_handler(event, context):
     ambulance_report_key = ''
     engine_report_key = ''
     chief_report_key = ''
+    finished_key = ''
+    list_of_keys = []
 
     # Iterate through all objects in the S3 bucket, and set the appropriate key names to the variables
     # instantiated above
@@ -42,14 +46,22 @@ def my_lambda_handler(event, context):
         key = obj['Key']
         if key.startswith(station_standby_prefix):
             station_standby_key = key
+            list_of_keys.append(station_standby_key)
         elif key.startswith(member_list_prefix):
             member_list_key = key
+            list_of_keys.append(member_list_key)
         elif key.startswith(ambulance_report_prefix):
             ambulance_report_key = key
+            list_of_keys.append(ambulance_report_key)
         elif key.startswith(engine_report_prefix):
             engine_report_key = key
+            list_of_keys.append(engine_report_key)
         elif key.startswith(chief_report_prefix):
             chief_report_key = key
+            list_of_keys.append(chief_report_key)
+        elif key.startswith(finished_report_prefix):
+            finished_key = key
+            list_of_keys.append(finished_key)
 
     # Get station standby csv from S3 bucket
     station_standby_obj = s3.get_object(Bucket=s3_bucket, Key=station_standby_key)
@@ -240,6 +252,7 @@ def my_lambda_handler(event, context):
     member_ambulance_calls_for_month = []
     member_engine_calls_for_month = []
     member_chief_calls_for_month = []
+    empty_list = []
     member_hours_for_year = []
     member_incentive_for_year = []
     member_ambulance_calls_for_year = []
@@ -254,6 +267,7 @@ def my_lambda_handler(event, context):
         member_ambulance_calls_for_month.append(member_ambulance_calls_dict_for_month[member])
         member_engine_calls_for_month.append(member_engine_calls_dict_for_month[member])
         member_chief_calls_for_month.append(member_chief_calls_dict_for_month[member])
+        empty_list.append(None)
         member_hours_for_year.append(member_hours_dict_for_year[member])
         member_incentive_for_year.append(member_incentive_due_dict_for_year[member])
         member_ambulance_calls_for_year.append(member_ambulance_calls_dict_for_year[member])
@@ -268,6 +282,7 @@ def my_lambda_handler(event, context):
         'Ambulance Calls Taken in ' + str(previous_month): member_ambulance_calls_for_month,
         'Engine Calls Taken in ' + str(previous_month): member_engine_calls_for_month,
         'Chief Calls Taken in ' + str(previous_month): member_chief_calls_for_month,
+        '': empty_list,
         'Station Standby Hours Reported in ' + str(current_year): member_hours_for_year,
         'Incentive Due in ' + str(current_year): member_incentive_for_year,
         'Ambulance Calls Taken in ' + str(current_year): member_ambulance_calls_for_year,
@@ -287,6 +302,10 @@ def my_lambda_handler(event, context):
 
     # Put request for final CSV report into S3 bucket
     s3_resource.Object(s3_bucket, report_upload).put(Body=csv_buffer.getvalue())
+
+    # Delete all files that are not needed anymore
+    for key in list_of_keys:
+        s3_resource.Object(s3_bucket, key).delete()
 
     # Return success
     return 0
