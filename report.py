@@ -2,7 +2,7 @@ import datetime
 import time
 import boto3
 import pandas as pd
-from io import StringIO
+from io import StringIO, BytesIO
 
 
 # Lambda function that will run each time each time a PUT request is done in the 'bvfco11' S3 bucket. This function
@@ -39,6 +39,15 @@ def my_lambda_handler(event, context):
     chief_report_key = ''
     finished_key = ''
     list_of_keys = []
+
+    number_ambulance_calls_month = 0
+    number_ambulance_calls_year = 0
+    number_engine_calls_month = 0
+    number_engine_calls_year = 0
+    number_medic_calls_month = 0
+    number_medic_calls_year = 0
+
+    station_stats_list = []
 
     # Iterate through all objects in the S3 bucket, and set the appropriate key names to the variables
     # instantiated above
@@ -137,7 +146,9 @@ def my_lambda_handler(event, context):
         date_dispatched = row.loc['Date Dispatched']
         month_of_call = int(date_dispatched.split('-')[1])
 
+        number_ambulance_calls_year += 1
         if month_of_call == previous_month_numerical:
+            number_ambulance_calls_month += 1
             if row.loc['Transport'] == 'No':
                 member_incentive_due_dict_for_month[row.loc['Driver']] += 5
                 member_incentive_due_dict_for_month[row.loc['Aide/OIC']] += 5
@@ -187,7 +198,9 @@ def my_lambda_handler(event, context):
         date_dispatched = row.loc['Date Dispatched']
         month_of_call = int(date_dispatched.split('-')[1])
 
+        number_engine_calls_year += 1
         if month_of_call == previous_month_numerical:
+            number_engine_calls_month += 1
             member_incentive_due_dict_for_month[row.loc['Driver']] += 5
             member_incentive_due_dict_for_month[row.loc['Officer-In-Charge']] += 5
             member_incentive_due_dict_for_year[row.loc['Driver']] += 5
@@ -245,6 +258,23 @@ def my_lambda_handler(event, context):
             if not (pd.isnull(row.loc['Aide'])):
                 member_chief_calls_dict_for_year[row.loc['Aide']] += 1
 
+    # Create text file with station stats for month and year
+    station_stats_list.append("Ambulance calls for " + str(previous_month) + ": " + str(number_ambulance_calls_month) +
+                              "\n")
+    station_stats_list.append("Engine calls for " + str(previous_month) + ": " + str(number_engine_calls_month) + "\n")
+    station_stats_list.append("Medics calls for " + str(previous_month) + ": " + str(number_medic_calls_month) + "\n")
+    station_stats_list.append('\n')
+    station_stats_list.append("Ambulance calls for " + str(current_year) + ": " + str(number_ambulance_calls_year) +
+                              "\n")
+    station_stats_list.append("Engine calls for " + str(current_year) + ": " + str(number_engine_calls_year) + "\n")
+    station_stats_list.append("Medic calls for " + str(current_year) + ": " + str(number_medic_calls_year) + "\n")
+    station_stats_list.append('\n')
+
+    # Create string of station statistics to convert into text file
+    station_stats_file = ''
+    for line in station_stats_list:
+        station_stats_file += line
+
     # Initialize member lists and stats for conversion into Python DataFrame
     member_names = []
     member_hours_for_month = []
@@ -300,8 +330,12 @@ def my_lambda_handler(event, context):
     # Convert the Python DataFrame into a CSV using Pandas
     member_hours_dataframe.to_csv(csv_buffer, index=False)
 
-    # Put request for final CSV report into S3 bucket
+    # Create S3-approved text file format for upload
+    station_standby_file_upload = StringIO(station_stats_file)
+
+    # Put request for final CSV report into S3 bucket and the station statistics text file
     s3_resource.Object(s3_bucket, report_upload).put(Body=csv_buffer.getvalue())
+    s3_resource.Object(s3_bucket, 'station_stats.txt').put(Body=station_standby_file_upload.read())
 
     # Delete all files that are not needed anymore
     for key in list_of_keys:
