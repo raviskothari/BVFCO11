@@ -2,7 +2,7 @@ import datetime
 import time
 import boto3
 import pandas as pd
-from io import StringIO, BytesIO
+from io import StringIO
 
 
 # Lambda function that will run each time each time a PUT request is done in the 'bvfco11' S3 bucket. This function
@@ -262,13 +262,11 @@ def my_lambda_handler(event, context):
     station_stats_list.append("Ambulance calls for " + str(previous_month) + ": " + str(number_ambulance_calls_month) +
                               "\n")
     station_stats_list.append("Engine calls for " + str(previous_month) + ": " + str(number_engine_calls_month) + "\n")
-    station_stats_list.append("Medics calls for " + str(previous_month) + ": " + str(number_medic_calls_month) + "\n")
-    station_stats_list.append('\n')
+    station_stats_list.append("Medic calls for " + str(previous_month) + ": " + str(number_medic_calls_month) + "\n\n")
     station_stats_list.append("Ambulance calls for " + str(current_year) + ": " + str(number_ambulance_calls_year) +
                               "\n")
     station_stats_list.append("Engine calls for " + str(current_year) + ": " + str(number_engine_calls_year) + "\n")
-    station_stats_list.append("Medic calls for " + str(current_year) + ": " + str(number_medic_calls_year) + "\n")
-    station_stats_list.append('\n')
+    station_stats_list.append("Medic calls for " + str(current_year) + ": " + str(number_medic_calls_year) + "\n\n")
 
     # Create string of station statistics to convert into text file
     station_stats_file = ''
