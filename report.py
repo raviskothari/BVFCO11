@@ -15,6 +15,9 @@ def my_lambda_handler(event, context):
 
     now = time.localtime()
 
+    # Get current month to not include those calls in the final CSV report
+    current_month_numerical = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(0)).month
+
     # Get previous month for naming the final CSV report
     previous_month = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(1)).strftime('%B')
     previous_month_numerical = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(1)).month
@@ -138,7 +141,8 @@ def my_lambda_handler(event, context):
             member_hours_dict_for_month[row.loc['Submitted By']] += row.loc['Total Number of Hours']
             member_hours_dict_for_year[row.loc['Submitted By']] += row.loc['Total Number of Hours']
         else:
-            member_hours_dict_for_year[row.loc['Submitted By']] += row.loc['Total Number of Hours']
+            if month_of_standby != current_month_numerical:
+                member_hours_dict_for_year[row.loc['Submitted By']] += row.loc['Total Number of Hours']
 
     # Iterate through ambulance response report and calculate total ambulance incentive and
     # ambulance calls taken by each member
@@ -146,7 +150,9 @@ def my_lambda_handler(event, context):
         date_dispatched = row.loc['Date Dispatched']
         month_of_call = int(date_dispatched.split('-')[1])
 
-        number_ambulance_calls_year += 1
+        if month_of_call != current_month_numerical:
+            number_ambulance_calls_year += 1
+
         if month_of_call == previous_month_numerical:
             number_ambulance_calls_month += 1
             if row.loc['Transport'] == 'No':
@@ -176,29 +182,31 @@ def my_lambda_handler(event, context):
                 member_ambulance_calls_dict_for_month[row.loc['Additional Crew']] += 1
                 member_ambulance_calls_dict_for_year[row.loc['Additional Crew']] += 1
         else:
-            if row.loc['Transport'] == 'No':
-                member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-                member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
-            elif row.loc['Transport'] == 'Yes':
-                member_incentive_due_dict_for_year[row.loc['Driver']] += 10
-                member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 10
-            else:
-                member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-                member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
+            if month_of_call != current_month_numerical:
+                if row.loc['Transport'] == 'No':
+                    member_incentive_due_dict_for_year[row.loc['Driver']] += 5
+                    member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
+                elif row.loc['Transport'] == 'Yes':
+                    member_incentive_due_dict_for_year[row.loc['Driver']] += 10
+                    member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 10
+                else:
+                    member_incentive_due_dict_for_year[row.loc['Driver']] += 5
+                    member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
 
-            member_ambulance_calls_dict_for_year[row.loc['Driver']] += 1
-            member_ambulance_calls_dict_for_year[row.loc['Aide/OIC']] += 1
-            if not (pd.isnull(row.loc['3rd'])):
-                member_ambulance_calls_dict_for_year[row.loc['3rd']] += 1
-            if not (pd.isnull(row.loc['Additional Crew'])):
-                member_ambulance_calls_dict_for_year[row.loc['Additional Crew']] += 1
+                member_ambulance_calls_dict_for_year[row.loc['Driver']] += 1
+                member_ambulance_calls_dict_for_year[row.loc['Aide/OIC']] += 1
+                if not (pd.isnull(row.loc['3rd'])):
+                    member_ambulance_calls_dict_for_year[row.loc['3rd']] += 1
+                if not (pd.isnull(row.loc['Additional Crew'])):
+                    member_ambulance_calls_dict_for_year[row.loc['Additional Crew']] += 1
 
     # Iterate through engine response report and calculate total engine incentive and engine calls taken by each member
     for index4, row in engine_response_report.iterrows():
         date_dispatched = row.loc['Date Dispatched']
         month_of_call = int(date_dispatched.split('-')[1])
 
-        number_engine_calls_year += 1
+        if month_of_call != current_month_numerical:
+            number_engine_calls_year += 1
         if month_of_call == previous_month_numerical:
             number_engine_calls_month += 1
             member_incentive_due_dict_for_month[row.loc['Driver']] += 5
@@ -226,21 +234,22 @@ def my_lambda_handler(event, context):
                 member_engine_calls_dict_for_month[row.loc['Observer']] += 1
                 member_engine_calls_dict_for_year[row.loc['Observer']] += 1
         else:
-            member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-            member_incentive_due_dict_for_year[row.loc['Officer-In-Charge']] += 5
+            if month_of_call != current_month_numerical:
+                member_incentive_due_dict_for_year[row.loc['Driver']] += 5
+                member_incentive_due_dict_for_year[row.loc['Officer-In-Charge']] += 5
 
-            member_engine_calls_dict_for_year[row.loc['Driver']] += 1
-            member_engine_calls_dict_for_year[row.loc['Officer-In-Charge']] += 1
-            if not (pd.isnull(row.loc['Line'])):
-                member_engine_calls_dict_for_year[row.loc['Line']] += 1
-            if not (pd.isnull(row.loc['Backup'])):
-                member_engine_calls_dict_for_year[row.loc['Backup']] += 1
-            if not (pd.isnull(row.loc['Bars'])):
-                member_engine_calls_dict_for_year[row.loc['Bars']] += 1
-            if not (pd.isnull(row.loc['Layout'])):
-                member_engine_calls_dict_for_year[row.loc['Layout']] += 1
-            if not (pd.isnull(row.loc['Observer'])):
-                member_engine_calls_dict_for_year[row.loc['Observer']] += 1
+                member_engine_calls_dict_for_year[row.loc['Driver']] += 1
+                member_engine_calls_dict_for_year[row.loc['Officer-In-Charge']] += 1
+                if not (pd.isnull(row.loc['Line'])):
+                    member_engine_calls_dict_for_year[row.loc['Line']] += 1
+                if not (pd.isnull(row.loc['Backup'])):
+                    member_engine_calls_dict_for_year[row.loc['Backup']] += 1
+                if not (pd.isnull(row.loc['Bars'])):
+                    member_engine_calls_dict_for_year[row.loc['Bars']] += 1
+                if not (pd.isnull(row.loc['Layout'])):
+                    member_engine_calls_dict_for_year[row.loc['Layout']] += 1
+                if not (pd.isnull(row.loc['Observer'])):
+                    member_engine_calls_dict_for_year[row.loc['Observer']] += 1
 
     # Iterate through chief response report and calculate total chief calls taken by each member
     for index5, row in chief_response_report.iterrows():
@@ -248,15 +257,18 @@ def my_lambda_handler(event, context):
         month_of_call = int(date_dispatched.split('-')[1])
 
         if month_of_call == previous_month_numerical:
-            member_chief_calls_dict_for_month[row.loc['Chief']] += 1
-            member_chief_calls_dict_for_year[row.loc['Chief']] += 1
+            if not (pd.isnull(row.loc['Chief'])):
+                member_chief_calls_dict_for_month[row.loc['Chief']] += 1
+                member_chief_calls_dict_for_year[row.loc['Chief']] += 1
             if not (pd.isnull(row.loc['Aide'])):
                 member_chief_calls_dict_for_month[row.loc['Aide']] += 1
                 member_chief_calls_dict_for_year[row.loc['Aide']] += 1
         else:
-            member_chief_calls_dict_for_year[row.loc['Chief']] += 1
-            if not (pd.isnull(row.loc['Aide'])):
-                member_chief_calls_dict_for_year[row.loc['Aide']] += 1
+            if month_of_call != current_month_numerical:
+                if not (pd.isnull(row.loc['Chief'])):
+                    member_chief_calls_dict_for_year[row.loc['Chief']] += 1
+                if not (pd.isnull(row.loc['Aide'])):
+                    member_chief_calls_dict_for_year[row.loc['Aide']] += 1
 
     # Create text file with station stats for month and year
     station_stats_list.append("Ambulance calls for " + str(previous_month) + ": " + str(number_ambulance_calls_month) +
