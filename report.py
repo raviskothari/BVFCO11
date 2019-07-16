@@ -32,6 +32,7 @@ def my_lambda_handler(event, context):
     ambulance_report_prefix = 'Ambulance_Response_Report'
     engine_report_prefix = 'Engine_Response_Report'
     chief_report_prefix = 'Chief_Response_Report'
+    summary_report_prefix = 'Scheduled_Time_Report'
     finished_report_prefix = 'finished'
 
     # Key instantiation for file retrieval from S3 bucket
@@ -40,6 +41,7 @@ def my_lambda_handler(event, context):
     ambulance_report_key = ''
     engine_report_key = ''
     chief_report_key = ''
+    summary_report_key = ''
     finished_key = ''
     list_of_keys = []
 
@@ -71,6 +73,9 @@ def my_lambda_handler(event, context):
         elif key.startswith(chief_report_prefix):
             chief_report_key = key
             list_of_keys.append(chief_report_key)
+        elif key.startswith(summary_report_prefix):
+            summary_report_key = key
+            list_of_keys.append(summary_report_key)
         elif key.startswith(finished_report_prefix):
             finished_key = key
             list_of_keys.append(finished_key)
@@ -95,12 +100,19 @@ def my_lambda_handler(event, context):
     chief_report_obj = s3.get_object(Bucket=s3_bucket, Key=chief_report_key)
     chief_response_report = pd.read_csv(chief_report_obj['Body'], header=1)
 
+    # Get summary report csv from S3 bucket
+    summary_report_obj = s3.get_object(Bucket=s3_bucket, Key=summary_report_key)
+    summary_report = pd.read_csv(summary_report_obj['Body'], header=1)
+
     # Initialize the dictionaries to map members to their appropriate statistics
     member_hours_dict_for_month = {}
     member_incentive_due_dict_for_month = {}
     member_ambulance_calls_dict_for_month = {}
     member_engine_calls_dict_for_month = {}
     member_chief_calls_dict_for_month = {}
+
+    member_hours = {}
+    member_did_complete_shifts = {}
 
     member_hours_dict_for_year = {}
     member_incentive_due_dict_for_year = {}
@@ -120,6 +132,10 @@ def my_lambda_handler(event, context):
             member_engine_calls_dict_for_month[row.loc['Member']] = 0
         if row.loc['Member'] not in member_chief_calls_dict_for_month:
             member_chief_calls_dict_for_month[row.loc['Member']] = 0
+        if row.loc['Member'] not in member_hours:
+            member_hours[row.loc['Member']] = 0
+        if row.loc['Member'] not in member_did_complete_shifts:
+            member_did_complete_shifts[row.loc['Member']] = False
 
         if row.loc['Member'] not in member_hours_dict_for_year:
             member_hours_dict_for_year[row.loc['Member']] = 0
@@ -270,6 +286,22 @@ def my_lambda_handler(event, context):
                 if not (pd.isnull(row.loc['Aide'])):
                     member_chief_calls_dict_for_year[row.loc['Aide']] += 1
 
+    # Iterate through station scheduled hours report and check if member completed the three required duty shifts for
+    # the month
+    for index6, row in summary_report.iterrows():
+        acceptable_schedules = ["1st Out Ambo", "2nd Out Ambo", "Wagon", "Non-Operational Observers"]
+
+        if row.loc['Schedule'] in acceptable_schedules:
+            if row.loc['Member'] in member_hours:
+                member_hours[row.loc['Member']] += row.loc['Total Hours']
+            else:
+                member_hours[row.loc['Member']] = row.loc['Total Hours']
+
+            if member_hours[row.loc['Member']] >= 36:
+                member_did_complete_shifts[row.loc["Member"]] = True
+            else:
+                member_did_complete_shifts[row.loc["Member"]] = False
+
     # Create text file with station stats for month and year
     station_stats_list.append("Ambulance calls for " + str(previous_month) + ": " + str(number_ambulance_calls_month) +
                               "\n")
@@ -287,6 +319,7 @@ def my_lambda_handler(event, context):
 
     # Initialize member lists and stats for conversion into Python DataFrame
     member_names = []
+    member_completed_shifts_for_month = []
     member_hours_for_month = []
     member_incentive_for_month = []
     member_ambulance_calls_for_month = []
@@ -302,6 +335,7 @@ def my_lambda_handler(event, context):
     # Add all members and their associated stats into the appropriate list
     for member in member_hours_dict_for_month:
         member_names.append(member)
+        member_completed_shifts_for_month.append(member_did_complete_shifts[member])
         member_hours_for_month.append(member_hours_dict_for_month[member])
         member_incentive_for_month.append(member_incentive_due_dict_for_month[member])
         member_ambulance_calls_for_month.append(member_ambulance_calls_dict_for_month[member])
@@ -317,6 +351,7 @@ def my_lambda_handler(event, context):
     # Set dictionary for final CSV report labels
     member_hour_final_dict = {
         'Member': member_names,
+        'Completed 3 shifts in ' + str(previous_month): member_completed_shifts_for_month,
         'Station Standby Hours Reported in ' + str(previous_month): member_hours_for_month,
         'Incentive Due in ' + str(previous_month): member_incentive_for_month,
         'Ambulance Calls Taken in ' + str(previous_month): member_ambulance_calls_for_month,
