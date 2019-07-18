@@ -340,12 +340,12 @@ def create_station_stats_text_file(ambulance_stats, engine_stats, medic_stats, a
     return StringIO(station_stats_file)
 
 
-def create_final_report(member_hours_dict_for_month, member_did_complete_shifts,
-                        member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
-                        member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
-                        member_hours_dict_for_year, member_incentive_due_dict_for_year,
-                        member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
-                        member_chief_calls_dict_for_year, csv_buffer, all_date_information):
+def create_final_anylatics_report(member_hours_dict_for_month, member_did_complete_shifts,
+                                  member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
+                                  member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
+                                  member_hours_dict_for_year, member_incentive_due_dict_for_year,
+                                  member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
+                                  member_chief_calls_dict_for_year, csv_buffer, all_date_information):
     # Initialize member lists and stats for conversion into Python DataFrame
     member_names = []
     member_completed_shifts_for_month = []
@@ -404,16 +404,64 @@ def create_final_report(member_hours_dict_for_month, member_did_complete_shifts,
     return True
 
 
-def put_objects_in_s3(report_upload, csv_buffer, station_standby_file_upload):
-    # Put request for final CSV report into S3 bucket and the station statistics text file
-    s3_resource.Object(s3_bucket, report_upload).put(Body=csv_buffer.getvalue())
-    s3_resource.Object(s3_bucket, 'station_stats.txt').put(Body=station_standby_file_upload.read())
+def put_objects_in_s3(report_upload_name, csv_buffer):
+    s3_resource.Object(s3_bucket, report_upload_name).put(Body=csv_buffer.getvalue())
 
 
 def delete_redundant_keys(keys):
     # Delete all files that are not needed anymore
     for key in keys.values():
         s3_resource.Object(s3_bucket, key).delete()
+
+
+def consolidate_probationary_member_goals(member_list, probationary_member_goals, station_standby_report,
+                                          all_date_information):
+    for index, row in member_list.iterrows():
+        if row.loc['Membership Type'] == 'Probationary':
+            probationary_member_goals[row.loc['Member']] = []
+
+    for index, row in station_standby_report.iterrows():
+        if row.loc['Submitted By'] in probationary_member_goals:
+            date_in = row.loc['Date In']
+            month_of_standby = int(date_in.split('-')[1])
+
+            if month_of_standby == all_date_information["PREVIOUS_MONTH_NUMERICAL"]:
+                if type(row.loc['What is your goal for today?']) is str:
+                    probationary_member_goals[row.loc['Submitted By']].append('*' +
+                                                                              row.loc['What is your goal for today?'])
+
+
+def create_probationary_goal_report(probationary_member_goals, csv_buffer):
+    member_names = []
+    member_individual_goals = []
+
+    for member in probationary_member_goals:
+        if len(probationary_member_goals[member]) == 0:
+            probationary_member_goals[member] = '-'
+        elif len(probationary_member_goals[member]) == 1:
+            probationary_member_goals[member] = str(probationary_member_goals[member][0])
+        else:
+            all_goals = ''
+            for goal in probationary_member_goals[member]:
+                all_goals += goal + '\n'
+            all_goals = all_goals[:-2]
+            probationary_member_goals[member] = all_goals
+
+    for member in probationary_member_goals:
+        member_names.append(member)
+        member_individual_goals.append(probationary_member_goals[member])
+
+    member_goals_final_dict = {
+        'Member': member_names,
+        'Goals': member_individual_goals
+    }
+
+    member_goals_dataframe = pd.DataFrame(member_goals_final_dict)
+
+    member_goals_dataframe.to_csv(csv_buffer, index=False)
+
+    # Returns True if no error arises in CSV report building
+    return True
 
 
 # Lambda function that will run each time each time a PUT request is done in the 'bvfco11' S3 bucket. This function
@@ -450,6 +498,7 @@ def my_lambda_handler(event, context):
 
     member_hours = {}
     member_did_complete_shifts = {}
+    probationary_member_goals = {}
 
     member_hours_dict_for_year = {}
     member_incentive_due_dict_for_year = {}
@@ -481,27 +530,43 @@ def my_lambda_handler(event, context):
 
     verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts)
 
+    consolidate_probationary_member_goals(member_list, probationary_member_goals, station_standby_report,
+                                          all_date_information)
+
     # To be replaced upon medic reports being submitted
     medic_stats = {
         "Medic_Calls_Month": 0,
         "Medic_Calls_Year": 0
     }
 
-    # Set the report title
-    report_upload = str(all_date_information['PREVIOUS_MONTH']) + '_Station_11_Report.csv'
+    # Set the analytics report title
+    analytics_report_upload = str(all_date_information['PREVIOUS_MONTH']) + '_Station_11_Report.csv'
+
+    # Set the station stats text file
+    station_stats_text_upload = str(all_date_information['PREVIOUS_MONTH']) + '_Station_Stats.txt'
+
+    # Set the probationary goals report title
+    probationary_report_upload = str(all_date_information['PREVIOUS_MONTH']) + '_Probationary_Member_Goals.csv'
+
     csv_buffer = StringIO()
 
-    create_final_report(member_hours_dict_for_month, member_did_complete_shifts,
-                        member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
-                        member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
-                        member_hours_dict_for_year, member_incentive_due_dict_for_year,
-                        member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
-                        member_chief_calls_dict_for_year, csv_buffer, all_date_information)
+    create_final_anylatics_report(member_hours_dict_for_month, member_did_complete_shifts,
+                                  member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
+                                  member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
+                                  member_hours_dict_for_year, member_incentive_due_dict_for_year,
+                                  member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
+                                  member_chief_calls_dict_for_year, csv_buffer, all_date_information)
+    put_objects_in_s3(analytics_report_upload, csv_buffer)
 
     station_standby_file_upload = create_station_stats_text_file(ambulance_stats, engine_stats, medic_stats,
                                                                  all_date_information)
 
-    put_objects_in_s3(report_upload, csv_buffer, station_standby_file_upload)
+    # TODO
+    s3_resource.Object(s3_bucket, station_stats_text_upload).put(Body=station_standby_file_upload.read())
+
+    csv_buffer = StringIO()
+    create_probationary_goal_report(probationary_member_goals, csv_buffer)
+    put_objects_in_s3(probationary_report_upload, csv_buffer)
 
     delete_redundant_keys(keys)
 
