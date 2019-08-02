@@ -3,8 +3,10 @@ import time
 import boto3
 import pandas as pd
 from io import StringIO
+from Standby import Standby
 
 # S3 credentials
+
 s3_bucket = 'bvfco11'
 s3 = boto3.client('s3')
 s3_resource = boto3.resource('s3')
@@ -126,7 +128,7 @@ def initialize_member_obj(member_list, member_hours_dict_for_month, member_incen
             member_chief_calls_dict_for_year[row.loc['Member']] = 0
 
 
-def calculate_standby_hours(station_standby_report, member_hours_dict_for_month, member_hours_dict_for_year,
+def calculate_standby_hours(station_standby_report, member_hours_dict_for_month, member_hours_dict_for_year, standby,
                             all_date_information):
     # Iterate through station standby report and calculate total hours volunteered by each member
     for index, row in station_standby_report.iterrows():
@@ -140,6 +142,18 @@ def calculate_standby_hours(station_standby_report, member_hours_dict_for_month,
             if month_of_standby != all_date_information["CURRENT_MONTH_NUMERICAL"]:
                 member_hours_dict_for_year[row.loc['Submitted By']] += row.loc['Total Number of Hours']
 
+        current_member_standby_obj = Standby()
+        current_member_standby_obj.set_attributes(row.loc['Submitted By'], str(row.loc['Date In']),
+                                                  str(row.loc['Time In']), str(row.loc['Time Out']),
+                                                  row.loc['Total Number of Hours'])
+
+        if row.loc['Submitted By'] not in standby:
+            standby[row.loc['Submitted By']] = []
+
+        standby[row.loc['Submitted By']].append(current_member_standby_obj)
+
+    return standby
+
 
 def calculate_ambulance_stats(ambulance_response_report,
                               member_incentive_due_dict_for_month, member_incentive_due_dict_for_year,
@@ -151,6 +165,9 @@ def calculate_ambulance_stats(ambulance_response_report,
     # Iterate through ambulance response report and calculate total ambulance incentive and ambulance calls taken by
     # each member
     for index, row in ambulance_response_report.iterrows():
+        if row.loc['Station Run Number/R#'] == 0:
+            continue
+
         date_dispatched = row.loc['Date Dispatched']
         month_of_call = int(date_dispatched.split('-')[1])
 
@@ -220,6 +237,9 @@ def calculate_engine_stats(engine_response_report,
 
     # Iterate through engine response report and calculate total engine incentive and engine calls taken by each member
     for index, row in engine_response_report.iterrows():
+        if row.loc['Station Run Number/F#'] == 0:
+            continue
+
         date_dispatched = row.loc['Date Dispatched']
         month_of_call = int(date_dispatched.split('-')[1])
 
@@ -299,7 +319,7 @@ def calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_mon
                     member_chief_calls_dict_for_year[row.loc['Aide']] += 1
 
 
-def verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts):
+def verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts, standby):
     # Iterate through station scheduled hours report and check if member completed the three required duty shifts for
     # the month
     for index, row in summary_report.iterrows():
@@ -311,6 +331,7 @@ def verify_duty_shift_completion(summary_report, member_hours, member_did_comple
             else:
                 member_hours[row.loc['Member']] = row.loc['Total Hours']
 
+            # TODO: Further verification of member duty shift completion by using the standby object
             if member_hours[row.loc['Member']] >= 36:
                 member_did_complete_shifts[row.loc['Member']] = True
             else:
@@ -340,7 +361,7 @@ def create_station_stats_text_file(ambulance_stats, engine_stats, medic_stats, a
     return StringIO(station_stats_file)
 
 
-def create_final_anylatics_report(member_hours_dict_for_month, member_did_complete_shifts,
+def create_final_analytics_report(member_hours_dict_for_month, member_did_complete_shifts,
                                   member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
                                   member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
                                   member_hours_dict_for_year, member_incentive_due_dict_for_year,
@@ -426,9 +447,9 @@ def consolidate_probationary_member_goals(member_list, probationary_member_goals
             month_of_standby = int(date_in.split('-')[1])
 
             if month_of_standby == all_date_information["PREVIOUS_MONTH_NUMERICAL"]:
-                if type(row.loc['What is your goal for today?']) is str:
+                if type(row.loc['What did you accomplish?']) is str:
                     probationary_member_goals[row.loc['Submitted By']].append('*' +
-                                                                              row.loc['What is your goal for today?'])
+                                                                              row.loc['What did you accomplish?'])
 
 
 def create_probationary_goal_report(probationary_member_goals, csv_buffer):
@@ -506,6 +527,8 @@ def my_lambda_handler(event, context):
     member_engine_calls_dict_for_year = {}
     member_chief_calls_dict_for_year = {}
 
+    standby = {}
+
     initialize_member_obj(member_list, member_hours_dict_for_month, member_incentive_due_dict_for_month,
                           member_ambulance_calls_dict_for_month, member_engine_calls_dict_for_month,
                           member_chief_calls_dict_for_month, member_hours, member_did_complete_shifts,
@@ -513,7 +536,7 @@ def my_lambda_handler(event, context):
                           member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
                           member_chief_calls_dict_for_year)
 
-    calculate_standby_hours(station_standby_report, member_hours_dict_for_month, member_hours_dict_for_year,
+    calculate_standby_hours(station_standby_report, member_hours_dict_for_month, member_hours_dict_for_year, standby,
                             all_date_information)
 
     ambulance_stats = calculate_ambulance_stats(ambulance_response_report, member_incentive_due_dict_for_month,
@@ -528,7 +551,7 @@ def my_lambda_handler(event, context):
     calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_month, member_chief_calls_dict_for_year,
                           all_date_information)
 
-    verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts)
+    verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts, standby)
 
     consolidate_probationary_member_goals(member_list, probationary_member_goals, station_standby_report,
                                           all_date_information)
@@ -550,7 +573,7 @@ def my_lambda_handler(event, context):
 
     csv_buffer = StringIO()
 
-    create_final_anylatics_report(member_hours_dict_for_month, member_did_complete_shifts,
+    create_final_analytics_report(member_hours_dict_for_month, member_did_complete_shifts,
                                   member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
                                   member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
                                   member_hours_dict_for_year, member_incentive_due_dict_for_year,
@@ -572,3 +595,6 @@ def my_lambda_handler(event, context):
 
     # Return success
     return 0
+
+
+my_lambda_handler(None, None)
