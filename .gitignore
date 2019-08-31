@@ -1,1 +1,7 @@
 .idea/
+__pycache__/
+aws-lambda-py3.6-pandas-numpy/
+lambda.zip
+numpy/
+pandas/
+pytz/

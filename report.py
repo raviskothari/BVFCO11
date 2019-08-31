@@ -4,12 +4,18 @@ import boto3
 import pandas as pd
 from io import StringIO
 from Standby import Standby
+from boto3.dynamodb.conditions import Key
 
 # S3 credentials
 
 s3_bucket = 'bvfco11'
-s3 = boto3.client('s3')
+s3_client = boto3.client('s3')
 s3_resource = boto3.resource('s3')
+
+# DynamoDB credentials
+
+dynamodb_resource = boto3.resource('dynamodb')
+dynamodb_table = dynamodb_resource.Table('TestMemberStatistics')
 
 
 def get_date_information():
@@ -44,7 +50,7 @@ def instantiate_keys():
     ambulance_report_prefix = 'Ambulance_Response_Report'
     engine_report_prefix = 'Engine_Response_Report'
     chief_report_prefix = 'Chief_Response_Report'
-    summary_report_prefix = 'Scheduled_Time_Report'
+    scheduled_report_prefix = 'Scheduled_Time_Report'
     finished_report_prefix = 'finished'
 
     # Key instantiation for file retrieval from S3 bucket
@@ -53,12 +59,12 @@ def instantiate_keys():
     ambulance_report_key = ''
     engine_report_key = ''
     chief_report_key = ''
-    summary_report_key = ''
+    scheduled_report_key = ''
     finished_key = ''
 
     # Iterate through all objects in the S3 bucket, and set the appropriate key names to the variables
     # instantiated above
-    for obj in s3.list_objects(Bucket=s3_bucket)['Contents']:
+    for obj in s3_client.list_objects(Bucket=s3_bucket)['Contents']:
         key = obj['Key']
         if key.startswith(station_standby_prefix):
             station_standby_key = key
@@ -70,8 +76,8 @@ def instantiate_keys():
             engine_report_key = key
         elif key.startswith(chief_report_prefix):
             chief_report_key = key
-        elif key.startswith(summary_report_prefix):
-            summary_report_key = key
+        elif key.startswith(scheduled_report_prefix):
+            scheduled_report_key = key
         elif key.startswith(finished_report_prefix):
             finished_key = key
 
@@ -81,7 +87,7 @@ def instantiate_keys():
         "Ambulance_Report": ambulance_report_key,
         "Engine_Report": engine_report_key,
         "Chief_Report": chief_report_key,
-        "Summary_Report": summary_report_key,
+        "Scheduled_Report": scheduled_report_key,
         "Finished": finished_key
     }
 
@@ -89,7 +95,7 @@ def instantiate_keys():
 
 
 def get_report_csv(key, header_number):
-    obj = s3.get_object(Bucket=s3_bucket, Key=key)
+    obj = s3_client.get_object(Bucket=s3_bucket, Key=key)
     return pd.read_csv(obj['Body'], header=header_number)
 
 
@@ -99,8 +105,14 @@ def initialize_member_obj(member_list, member_hours_dict_for_month, member_incen
                           member_hours_dict_for_year, member_incentive_due_dict_for_year,
                           member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
                           member_chief_calls_dict_for_year):
+
+    member_member_id_relationship = {}
+
     # Iterate through member list and initialize all members with 0 stats
     for index, row in member_list.iterrows():
+        member_id = str(row.loc['Dept ID'])
+        member_name = str(row.loc['Member'])
+
         if row.loc['Member'] not in member_hours_dict_for_month:
             member_hours_dict_for_month[row.loc['Member']] = 0
         if row.loc['Member'] not in member_incentive_due_dict_for_month:
@@ -126,6 +138,28 @@ def initialize_member_obj(member_list, member_hours_dict_for_month, member_incen
             member_engine_calls_dict_for_year[row.loc['Member']] = 0
         if row.loc['Member'] not in member_chief_calls_dict_for_year:
             member_chief_calls_dict_for_year[row.loc['Member']] = 0
+
+        # Create empty entry in table for all users if it does not exist
+
+        count = dynamodb_table.query(
+            Select='COUNT',
+            KeyConditionExpression=Key('ID_Number').eq(member_id)
+
+        )
+
+        if count['Count'] == 0:
+            dynamodb_table.put_item(
+                Item={
+                    'ID_Number': member_id,
+                    'Member Name': member_name,
+                    'Number Missed Duty Shift Months': '0',
+                    'Warning Level': 'green'
+                }
+            )
+
+        member_member_id_relationship[member_name] = member_id
+
+    return member_member_id_relationship
 
 
 def calculate_standby_hours(station_standby_report, member_hours_dict_for_month, member_hours_dict_for_year, standby,
@@ -319,7 +353,8 @@ def calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_mon
                     member_chief_calls_dict_for_year[row.loc['Aide']] += 1
 
 
-def verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts, standby):
+def verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts, member_member_id,
+                                 warning_level):
     # Iterate through station scheduled hours report and check if member completed the three required duty shifts for
     # the month
     for index, row in summary_report.iterrows():
@@ -336,6 +371,31 @@ def verify_duty_shift_completion(summary_report, member_hours, member_did_comple
                 member_did_complete_shifts[row.loc['Member']] = True
             else:
                 member_did_complete_shifts[row.loc['Member']] = False
+
+    update_database_for_duty_shift_completion(member_did_complete_shifts, member_member_id, warning_level)
+
+
+def update_database_for_duty_shift_completion(member_did_complete_shifts, member_member_id, warning_level):
+    for member in member_did_complete_shifts:
+        if not member_did_complete_shifts[member]:
+            member_query = dynamodb_table.query(
+                KeyConditionExpression=Key('ID_Number').eq(member_member_id[member])
+            )
+
+            num_missed_duty_shifts = int(member_query['Items'][0]['Number Missed Duty Shift Months'])
+
+            if num_missed_duty_shifts <= 3:
+                num_missed_duty_shifts += 1
+
+            if member_query is not None:
+                dynamodb_table.put_item(
+                    Item={
+                        'ID_Number': member_query['Items'][0]['ID_Number'],
+                        'Member Name': member_query['Items'][0]['Member Name'],
+                        'Number Missed Duty Shift Months': str(num_missed_duty_shifts),
+                        'Warning Level': warning_level[num_missed_duty_shifts]
+                    }
+                )
 
 
 def create_station_stats_text_file(ambulance_stats, engine_stats, medic_stats, all_date_information):
@@ -366,7 +426,7 @@ def create_final_analytics_report(member_hours_dict_for_month, member_did_comple
                                   member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
                                   member_hours_dict_for_year, member_incentive_due_dict_for_year,
                                   member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
-                                  member_chief_calls_dict_for_year, csv_buffer, all_date_information):
+                                  member_chief_calls_dict_for_year, csv_buffer, member_member_id, all_date_information):
     # Initialize member lists and stats for conversion into Python DataFrame
     member_names = []
     member_completed_shifts_for_month = []
@@ -381,9 +441,18 @@ def create_final_analytics_report(member_hours_dict_for_month, member_did_comple
     member_ambulance_calls_for_year = []
     member_engine_calls_for_year = []
     member_chief_calls_for_year = []
+    number_duty_shift_months_missed = []
+    warning_level = []
 
     # Add all members and their associated stats into the appropriate list
     for member in member_hours_dict_for_month:
+
+        member_dynamo_query = dynamodb_table.query(
+                KeyConditionExpression=Key('ID_Number').eq(member_member_id[member]))
+        number_duty_shift_months_missed_for_member = int(member_dynamo_query['Items'][0]['Number Missed Duty Shift '
+                                                                                         'Months'])
+        warning_level_for_member = str(member_dynamo_query['Items'][0]['Warning Level'])
+
         member_names.append(member)
         member_completed_shifts_for_month.append(member_did_complete_shifts[member])
         member_hours_for_month.append(member_hours_dict_for_month[member])
@@ -397,11 +466,15 @@ def create_final_analytics_report(member_hours_dict_for_month, member_did_comple
         member_ambulance_calls_for_year.append(member_ambulance_calls_dict_for_year[member])
         member_engine_calls_for_year.append(member_engine_calls_dict_for_year[member])
         member_chief_calls_for_year.append(member_chief_calls_dict_for_year[member])
+        number_duty_shift_months_missed.append(number_duty_shift_months_missed_for_member)
+        warning_level.append(warning_level_for_member)
 
     # Set dictionary for final CSV report labels
     member_hour_final_dict = {
         'Member': member_names,
-        'Completed 3 shifts in ' + str(all_date_information['PREVIOUS_MONTH']): member_completed_shifts_for_month,
+        'Completed 3 shifts in ' + str(all_date_information['PREVIOUS_MONTH']) + '?': member_completed_shifts_for_month,
+        'Total Number of Missed Duty Shift Months': number_duty_shift_months_missed,
+        'Warning Level': warning_level,
         'Station Standby Hours Reported in ' + str(all_date_information['PREVIOUS_MONTH']): member_hours_for_month,
         'Incentive Due in ' + str(all_date_information['PREVIOUS_MONTH']): member_incentive_for_month,
         'Ambulance Calls Taken in ' + str(all_date_information['PREVIOUS_MONTH']): member_ambulance_calls_for_month,
@@ -507,8 +580,8 @@ def my_lambda_handler(event, context):
     # Get chief response report csv from S3 bucket
     chief_response_report = get_report_csv(keys['Chief_Report'], 1)
 
-    # Get summary report csv from S3 bucket
-    summary_report = get_report_csv(keys["Summary_Report"], 1)
+    # Get scheduled report csv from S3 bucket
+    scheduled_report = get_report_csv(keys["Scheduled_Report"], 1)
 
     # Initialize the dictionaries to map members to their appropriate statistics
     member_hours_dict_for_month = {}
@@ -529,12 +602,19 @@ def my_lambda_handler(event, context):
 
     standby = {}
 
-    initialize_member_obj(member_list, member_hours_dict_for_month, member_incentive_due_dict_for_month,
-                          member_ambulance_calls_dict_for_month, member_engine_calls_dict_for_month,
-                          member_chief_calls_dict_for_month, member_hours, member_did_complete_shifts,
-                          member_hours_dict_for_year, member_incentive_due_dict_for_year,
-                          member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
-                          member_chief_calls_dict_for_year)
+    warning_level = {
+        0: 'green',
+        1: 'yellow',
+        2: 'red',
+        3: 'black'
+    }
+
+    member_member_id = initialize_member_obj(member_list, member_hours_dict_for_month,
+                                             member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
+                                             member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
+                                             member_hours, member_did_complete_shifts, member_hours_dict_for_year,
+                                             member_incentive_due_dict_for_year, member_ambulance_calls_dict_for_year,
+                                             member_engine_calls_dict_for_year, member_chief_calls_dict_for_year)
 
     calculate_standby_hours(station_standby_report, member_hours_dict_for_month, member_hours_dict_for_year, standby,
                             all_date_information)
@@ -551,7 +631,7 @@ def my_lambda_handler(event, context):
     calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_month, member_chief_calls_dict_for_year,
                           all_date_information)
 
-    verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts, standby)
+    verify_duty_shift_completion(scheduled_report, member_hours, member_did_complete_shifts, member_member_id, warning_level)
 
     consolidate_probationary_member_goals(member_list, probationary_member_goals, station_standby_report,
                                           all_date_information)
@@ -578,7 +658,7 @@ def my_lambda_handler(event, context):
                                   member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
                                   member_hours_dict_for_year, member_incentive_due_dict_for_year,
                                   member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
-                                  member_chief_calls_dict_for_year, csv_buffer, all_date_information)
+                                  member_chief_calls_dict_for_year, csv_buffer, member_member_id, all_date_information)
     put_objects_in_s3(analytics_report_upload, csv_buffer)
 
     station_standby_file_upload = create_station_stats_text_file(ambulance_stats, engine_stats, medic_stats,
@@ -596,5 +676,3 @@ def my_lambda_handler(event, context):
     # Return success
     return 0
 
-
-my_lambda_handler(None, None)
