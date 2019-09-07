@@ -366,7 +366,6 @@ def verify_duty_shift_completion(summary_report, member_hours, member_did_comple
             else:
                 member_hours[row.loc['Member']] = row.loc['Total Hours']
 
-            # TODO: Further verification of member duty shift completion by using the standby object
             if member_hours[row.loc['Member']] >= 36:
                 member_did_complete_shifts[row.loc['Member']] = True
             else:
@@ -384,7 +383,7 @@ def update_database_for_duty_shift_completion(member_did_complete_shifts, member
 
             num_missed_duty_shifts = int(member_query['Items'][0]['Number Missed Duty Shift Months'])
 
-            if num_missed_duty_shifts <= 3:
+            if num_missed_duty_shifts < 3:
                 num_missed_duty_shifts += 1
 
             if member_query is not None:
