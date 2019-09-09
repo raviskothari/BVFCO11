@@ -5,6 +5,7 @@ import pandas as pd
 from io import StringIO
 from Standby import Standby
 from boto3.dynamodb.conditions import Key
+import logging
 
 # S3 credentials
 
@@ -16,6 +17,8 @@ s3_resource = boto3.resource('s3')
 
 dynamodb_resource = boto3.resource('dynamodb')
 dynamodb_table = dynamodb_resource.Table('TestMemberStatistics')
+
+logger = logging.getLogger().setLevel(logging.DEBUG)
 
 
 def get_date_information():
@@ -40,6 +43,10 @@ def get_date_information():
     }
 
     return date_information
+
+
+class IncorrectNumberOfInputsException(Exception):
+    pass
 
 
 def instantiate_keys():
@@ -78,8 +85,10 @@ def instantiate_keys():
             chief_report_key = key
         elif key.startswith(scheduled_report_prefix):
             scheduled_report_key = key
-        elif key.startswith(finished_report_prefix):
+        elif key.startswith(finished_report_prefix) and key is not None:
             finished_key = key
+        elif key.startswith('lambda_package'):
+            continue
 
     keys = {
         "Station_Standby": station_standby_key,
@@ -90,6 +99,13 @@ def instantiate_keys():
         "Scheduled_Report": scheduled_report_key,
         "Finished": finished_key
     }
+
+    for key in keys:
+        if keys[key] == '' and key is not 'Finished':
+            message = 'All required files were not applied. Please try again after uploading all required files.'
+            logger.error(message)
+            e = Exception(message)
+            raise IncorrectNumberOfInputsException(e)
 
     return keys
 
@@ -353,8 +369,7 @@ def calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_mon
                     member_chief_calls_dict_for_year[row.loc['Aide']] += 1
 
 
-def verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts, member_member_id,
-                                 warning_level):
+def verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts):
     # Iterate through station scheduled hours report and check if member completed the three required duty shifts for
     # the month
     for index, row in summary_report.iterrows():
@@ -370,8 +385,6 @@ def verify_duty_shift_completion(summary_report, member_hours, member_did_comple
                 member_did_complete_shifts[row.loc['Member']] = True
             else:
                 member_did_complete_shifts[row.loc['Member']] = False
-
-    update_database_for_duty_shift_completion(member_did_complete_shifts, member_member_id, warning_level)
 
 
 def update_database_for_duty_shift_completion(member_did_complete_shifts, member_member_id, warning_level):
@@ -503,8 +516,11 @@ def put_objects_in_s3(report_upload_name, csv_buffer):
 
 def delete_redundant_keys(keys):
     # Delete all files that are not needed anymore
-    for key in keys.values():
-        s3_resource.Object(s3_bucket, key).delete()
+    for valu in keys.values():
+        if valu == '':
+            continue
+        else:
+            s3_resource.Object(s3_bucket, valu).delete()
 
 
 def consolidate_probationary_member_goals(member_list, probationary_member_goals, station_standby_report,
@@ -630,7 +646,7 @@ def my_lambda_handler(event, context):
     calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_month, member_chief_calls_dict_for_year,
                           all_date_information)
 
-    verify_duty_shift_completion(scheduled_report, member_hours, member_did_complete_shifts, member_member_id, warning_level)
+    verify_duty_shift_completion(scheduled_report, member_hours, member_did_complete_shifts)
 
     consolidate_probationary_member_goals(member_list, probationary_member_goals, station_standby_report,
                                           all_date_information)
@@ -672,6 +688,7 @@ def my_lambda_handler(event, context):
 
     delete_redundant_keys(keys)
 
+    update_database_for_duty_shift_completion(member_did_complete_shifts, member_member_id, warning_level)
+
     # Return success
     return 0
-
