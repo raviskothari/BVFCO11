@@ -1,6 +1,9 @@
-import datetime
+import datetime as dt
+from datetime import datetime
 import time
 import boto3
+import holidays
+
 import pandas as pd
 from io import StringIO
 from Standby import Standby
@@ -16,7 +19,7 @@ s3_resource = boto3.resource('s3')
 # DynamoDB credentials
 
 dynamodb_resource = boto3.resource('dynamodb')
-dynamodb_table = dynamodb_resource.Table('TestMemberStatistics')
+dynamodb_table = dynamodb_resource.Table('MemberStatistics')
 
 logger = logging.getLogger().setLevel(logging.DEBUG)
 
@@ -25,14 +28,14 @@ def get_date_information():
     now = time.localtime()
 
     # Get current month to not include those calls in the final CSV report
-    current_month_numerical = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(0)).month
+    current_month_numerical = (dt.date(now.tm_year, now.tm_mon, 1) - dt.timedelta(0)).month
 
     # Get previous month for naming the final CSV report
-    previous_month = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(1)).strftime('%B')
-    previous_month_numerical = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(1)).month
+    previous_month = (dt.date(now.tm_year, now.tm_mon, 1) - dt.timedelta(1)).strftime('%B')
+    previous_month_numerical = (dt.date(now.tm_year, now.tm_mon, 1) - dt.timedelta(1)).month
 
     # Get current year
-    current_year = (datetime.date(now.tm_year, now.tm_mon, 1) - datetime.timedelta(1)).year
+    current_year = (dt.date(now.tm_year, now.tm_mon, 1) - dt.timedelta(1)).year
 
     date_information = {
         'CURRENT_TIME': now,
@@ -118,10 +121,9 @@ def get_report_csv(key, header_number):
 def initialize_member_obj(member_list, member_hours_dict_for_month, member_incentive_due_dict_for_month,
                           member_ambulance_calls_dict_for_month, member_engine_calls_dict_for_month,
                           member_chief_calls_dict_for_month, member_hours, member_did_complete_shifts,
-                          member_hours_dict_for_year, member_incentive_due_dict_for_year,
+                          member_hours_dict_for_year,
                           member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
                           member_chief_calls_dict_for_year):
-
     member_member_id_relationship = {}
 
     # Iterate through member list and initialize all members with 0 stats
@@ -146,8 +148,6 @@ def initialize_member_obj(member_list, member_hours_dict_for_month, member_incen
 
         if row.loc['Member'] not in member_hours_dict_for_year:
             member_hours_dict_for_year[row.loc['Member']] = 0
-        if row.loc['Member'] not in member_incentive_due_dict_for_year:
-            member_incentive_due_dict_for_year[row.loc['Member']] = 0
         if row.loc['Member'] not in member_ambulance_calls_dict_for_year:
             member_ambulance_calls_dict_for_year[row.loc['Member']] = 0
         if row.loc['Member'] not in member_engine_calls_dict_for_year:
@@ -206,9 +206,9 @@ def calculate_standby_hours(station_standby_report, member_hours_dict_for_month,
 
 
 def calculate_ambulance_stats(ambulance_response_report,
-                              member_incentive_due_dict_for_month, member_incentive_due_dict_for_year,
+                              member_incentive_due_dict_for_month,
                               member_ambulance_calls_dict_for_month, member_ambulance_calls_dict_for_year,
-                              all_date_information):
+                              all_date_information, scheduled_report):
     number_ambulance_calls_month = 0
     number_ambulance_calls_year = 0
 
@@ -226,21 +226,35 @@ def calculate_ambulance_stats(ambulance_response_report,
 
         if month_of_call == all_date_information["PREVIOUS_MONTH_NUMERICAL"]:
             number_ambulance_calls_month += 1
+
+            if 800 <= row.loc['Time Out'] <= 1600:
+                driver_for_call = row.loc['Driver']
+                aide_for_call = row.loc['Aide/OIC']
+                crew_for_call = [driver_for_call, aide_for_call]
+                is_day_shift_call = check_if_day_shift_call(date_dispatched, crew_for_call, scheduled_report)
+                if is_day_shift_call:
+                    member_ambulance_calls_dict_for_month[row.loc['Driver']] += 1
+                    member_ambulance_calls_dict_for_month[row.loc['Aide/OIC']] += 1
+                    member_ambulance_calls_dict_for_year[row.loc['Driver']] += 1
+                    member_ambulance_calls_dict_for_year[row.loc['Aide/OIC']] += 1
+                    if not (pd.isnull(row.loc['3rd'])):
+                        member_ambulance_calls_dict_for_month[row.loc['3rd']] += 1
+                        member_ambulance_calls_dict_for_year[row.loc['3rd']] += 1
+                    if not (pd.isnull(row.loc['Additional Crew'])):
+                        member_ambulance_calls_dict_for_month[row.loc['Additional Crew']] += 1
+                        member_ambulance_calls_dict_for_year[row.loc['Additional Crew']] += 1
+
+                    continue
+
             if row.loc['Transport'] == 'No':
                 member_incentive_due_dict_for_month[row.loc['Driver']] += 5
                 member_incentive_due_dict_for_month[row.loc['Aide/OIC']] += 5
-                member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-                member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
             elif row.loc['Transport'] == 'Yes':
                 member_incentive_due_dict_for_month[row.loc['Driver']] += 10
                 member_incentive_due_dict_for_month[row.loc['Aide/OIC']] += 10
-                member_incentive_due_dict_for_year[row.loc['Driver']] += 10
-                member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 10
             else:
                 member_incentive_due_dict_for_month[row.loc['Driver']] += 5
                 member_incentive_due_dict_for_month[row.loc['Aide/OIC']] += 5
-                member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-                member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
 
             member_ambulance_calls_dict_for_month[row.loc['Driver']] += 1
             member_ambulance_calls_dict_for_month[row.loc['Aide/OIC']] += 1
@@ -254,15 +268,6 @@ def calculate_ambulance_stats(ambulance_response_report,
                 member_ambulance_calls_dict_for_year[row.loc['Additional Crew']] += 1
         else:
             if month_of_call != all_date_information["CURRENT_MONTH_NUMERICAL"]:
-                if row.loc['Transport'] == 'No':
-                    member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-                    member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
-                elif row.loc['Transport'] == 'Yes':
-                    member_incentive_due_dict_for_year[row.loc['Driver']] += 10
-                    member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 10
-                else:
-                    member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-                    member_incentive_due_dict_for_year[row.loc['Aide/OIC']] += 5
 
                 member_ambulance_calls_dict_for_year[row.loc['Driver']] += 1
                 member_ambulance_calls_dict_for_year[row.loc['Aide/OIC']] += 1
@@ -280,7 +285,7 @@ def calculate_ambulance_stats(ambulance_response_report,
 
 
 def calculate_engine_stats(engine_response_report,
-                           member_incentive_due_dict_for_month, member_incentive_due_dict_for_year,
+                           member_incentive_due_dict_for_month,
                            member_engine_calls_dict_for_month, member_engine_calls_dict_for_year, all_date_information):
     number_engine_calls_month = 0
     number_engine_calls_year = 0
@@ -299,8 +304,6 @@ def calculate_engine_stats(engine_response_report,
             number_engine_calls_month += 1
             member_incentive_due_dict_for_month[row.loc['Driver']] += 5
             member_incentive_due_dict_for_month[row.loc['Officer-In-Charge']] += 5
-            member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-            member_incentive_due_dict_for_year[row.loc['Officer-In-Charge']] += 5
 
             member_engine_calls_dict_for_month[row.loc['Driver']] += 1
             member_engine_calls_dict_for_month[row.loc['Officer-In-Charge']] += 1
@@ -323,8 +326,6 @@ def calculate_engine_stats(engine_response_report,
                 member_engine_calls_dict_for_year[row.loc['Observer']] += 1
         else:
             if month_of_call != all_date_information["CURRENT_MONTH_NUMERICAL"]:
-                member_incentive_due_dict_for_year[row.loc['Driver']] += 5
-                member_incentive_due_dict_for_year[row.loc['Officer-In-Charge']] += 5
 
                 member_engine_calls_dict_for_year[row.loc['Driver']] += 1
                 member_engine_calls_dict_for_year[row.loc['Officer-In-Charge']] += 1
@@ -345,6 +346,27 @@ def calculate_engine_stats(engine_response_report,
     }
 
     return engine_station_stats
+
+
+def check_if_day_shift_call(date_dispatched, crew_for_call, scheduled_report):
+    if len(crew_for_call) == 0:
+        return True
+
+    return_value = False
+    for index, row in scheduled_report.iterrows():
+        if row.loc['Schedule'] == 'Day Shift':
+            date_of_shift = row.loc['Shift Start Date']
+            formatted_date_of_shift = datetime.strptime(date_of_shift, '%d-%b-%Y').strftime('%d/%m/%Y')
+            formatted_date_dispatched = datetime.strptime(date_dispatched, '%Y-%m-%d').strftime('%d/%m/%Y')
+            if formatted_date_of_shift == formatted_date_dispatched:
+                if len(crew_for_call) > 0 and crew_for_call[0] == row.loc['Member']:
+                    crew_for_call.remove(row.loc['Member'])
+                    return_value = check_if_day_shift_call(date_dispatched, crew_for_call, scheduled_report)
+                elif len(crew_for_call) == 2 and crew_for_call[1] == row.loc['Member']:
+                    crew_for_call.remove(row.loc['Member'])
+                    return_value = check_if_day_shift_call(date_dispatched, crew_for_call, scheduled_report)
+
+    return return_value
 
 
 def calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_month, member_chief_calls_dict_for_year,
@@ -369,10 +391,10 @@ def calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_mon
                     member_chief_calls_dict_for_year[row.loc['Aide']] += 1
 
 
-def verify_duty_shift_completion(summary_report, member_hours, member_did_complete_shifts):
+def verify_duty_shift_completion(scheduled_report, member_hours, member_did_complete_shifts):
     # Iterate through station scheduled hours report and check if member completed the three required duty shifts for
     # the month
-    for index, row in summary_report.iterrows():
+    for index, row in scheduled_report.iterrows():
         acceptable_schedules = ['1st Out Ambo', '2nd Out Ambo', 'Wagon', 'Non-Operational Observers']
 
         if row.loc['Schedule'] in acceptable_schedules:
@@ -410,6 +432,19 @@ def update_database_for_duty_shift_completion(member_did_complete_shifts, member
                 )
 
 
+def add_day_shift_incentives(scheduled_report, member_incentive_due_dict_for_month):
+    us_holidays = holidays.UnitedStates(years=2019)
+    for index, row in scheduled_report.iterrows():
+        if row.loc['Schedule'] == 'Day Shift':
+            if row.loc['Shift Start Date']:
+                formatted_date_of_shift = datetime.strptime(row.loc['Shift Start Date'], '%d-%b-%Y') \
+                    .strftime('%d/%m/%Y')
+                if formatted_date_of_shift in us_holidays:
+                    member_incentive_due_dict_for_month[row.loc['Member']] += 100
+                else:
+                    member_incentive_due_dict_for_month[row.loc['Member']] += 80
+
+
 def create_station_stats_text_file(ambulance_stats, engine_stats, medic_stats, all_date_information):
     station_stats_file = ''
 
@@ -436,7 +471,7 @@ def create_station_stats_text_file(ambulance_stats, engine_stats, medic_stats, a
 def create_final_analytics_report(member_hours_dict_for_month, member_did_complete_shifts,
                                   member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
                                   member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
-                                  member_hours_dict_for_year, member_incentive_due_dict_for_year,
+                                  member_hours_dict_for_year,
                                   member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
                                   member_chief_calls_dict_for_year, csv_buffer, member_member_id, all_date_information):
     # Initialize member lists and stats for conversion into Python DataFrame
@@ -449,7 +484,6 @@ def create_final_analytics_report(member_hours_dict_for_month, member_did_comple
     member_chief_calls_for_month = []
     empty_list = []
     member_hours_for_year = []
-    member_incentive_for_year = []
     member_ambulance_calls_for_year = []
     member_engine_calls_for_year = []
     member_chief_calls_for_year = []
@@ -458,9 +492,8 @@ def create_final_analytics_report(member_hours_dict_for_month, member_did_comple
 
     # Add all members and their associated stats into the appropriate list
     for member in member_hours_dict_for_month:
-
         member_dynamo_query = dynamodb_table.query(
-                KeyConditionExpression=Key('ID_Number').eq(member_member_id[member]))
+            KeyConditionExpression=Key('ID_Number').eq(member_member_id[member]))
         number_duty_shift_months_missed_for_member = int(member_dynamo_query['Items'][0]['Number Missed Duty Shift '
                                                                                          'Months'])
         warning_level_for_member = str(member_dynamo_query['Items'][0]['Warning Level'])
@@ -474,7 +507,6 @@ def create_final_analytics_report(member_hours_dict_for_month, member_did_comple
         member_chief_calls_for_month.append(member_chief_calls_dict_for_month[member])
         empty_list.append(None)
         member_hours_for_year.append(member_hours_dict_for_year[member])
-        member_incentive_for_year.append(member_incentive_due_dict_for_year[member])
         member_ambulance_calls_for_year.append(member_ambulance_calls_dict_for_year[member])
         member_engine_calls_for_year.append(member_engine_calls_dict_for_year[member])
         member_chief_calls_for_year.append(member_chief_calls_dict_for_year[member])
@@ -494,7 +526,6 @@ def create_final_analytics_report(member_hours_dict_for_month, member_did_comple
         'Chief Calls Taken in ' + str(all_date_information['PREVIOUS_MONTH']): member_chief_calls_for_month,
         '': empty_list,
         'Station Standby Hours Reported in ' + str(all_date_information['CURRENT_YEAR']): member_hours_for_year,
-        'Incentive Due in ' + str(all_date_information['CURRENT_YEAR']): member_incentive_for_year,
         'Ambulance Calls Taken in ' + str(all_date_information['CURRENT_YEAR']): member_ambulance_calls_for_year,
         'Engine Calls Taken in ' + str(all_date_information['CURRENT_YEAR']): member_engine_calls_for_year,
         'Chief Calls Taken in ' + str(all_date_information['CURRENT_YEAR']): member_chief_calls_for_year
@@ -610,7 +641,6 @@ def my_lambda_handler(event, context):
     probationary_member_goals = {}
 
     member_hours_dict_for_year = {}
-    member_incentive_due_dict_for_year = {}
     member_ambulance_calls_dict_for_year = {}
     member_engine_calls_dict_for_year = {}
     member_chief_calls_dict_for_year = {}
@@ -628,19 +658,19 @@ def my_lambda_handler(event, context):
                                              member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
                                              member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
                                              member_hours, member_did_complete_shifts, member_hours_dict_for_year,
-                                             member_incentive_due_dict_for_year, member_ambulance_calls_dict_for_year,
+                                             member_ambulance_calls_dict_for_year,
                                              member_engine_calls_dict_for_year, member_chief_calls_dict_for_year)
 
     calculate_standby_hours(station_standby_report, member_hours_dict_for_month, member_hours_dict_for_year, standby,
                             all_date_information)
 
     ambulance_stats = calculate_ambulance_stats(ambulance_response_report, member_incentive_due_dict_for_month,
-                                                member_incentive_due_dict_for_year,
                                                 member_ambulance_calls_dict_for_month,
-                                                member_ambulance_calls_dict_for_year, all_date_information)
+                                                member_ambulance_calls_dict_for_year, all_date_information,
+                                                scheduled_report)
 
     engine_stats = calculate_engine_stats(engine_response_report, member_incentive_due_dict_for_month,
-                                          member_incentive_due_dict_for_year, member_engine_calls_dict_for_month,
+                                          member_engine_calls_dict_for_month,
                                           member_engine_calls_dict_for_year, all_date_information)
 
     calculate_chief_stats(chief_response_report, member_chief_calls_dict_for_month, member_chief_calls_dict_for_year,
@@ -650,6 +680,8 @@ def my_lambda_handler(event, context):
 
     consolidate_probationary_member_goals(member_list, probationary_member_goals, station_standby_report,
                                           all_date_information)
+
+    add_day_shift_incentives(scheduled_report, member_incentive_due_dict_for_month)
 
     # To be replaced upon medic reports being submitted
     medic_stats = {
@@ -668,10 +700,14 @@ def my_lambda_handler(event, context):
 
     csv_buffer = StringIO()
 
+    update_database_for_duty_shift_completion(member_did_complete_shifts, member_member_id, warning_level)
+
+    time.sleep(10)
+
     create_final_analytics_report(member_hours_dict_for_month, member_did_complete_shifts,
                                   member_incentive_due_dict_for_month, member_ambulance_calls_dict_for_month,
                                   member_engine_calls_dict_for_month, member_chief_calls_dict_for_month,
-                                  member_hours_dict_for_year, member_incentive_due_dict_for_year,
+                                  member_hours_dict_for_year,
                                   member_ambulance_calls_dict_for_year, member_engine_calls_dict_for_year,
                                   member_chief_calls_dict_for_year, csv_buffer, member_member_id, all_date_information)
     put_objects_in_s3(analytics_report_upload, csv_buffer)
@@ -688,7 +724,6 @@ def my_lambda_handler(event, context):
 
     delete_redundant_keys(keys)
 
-    update_database_for_duty_shift_completion(member_did_complete_shifts, member_member_id, warning_level)
 
     # Return success
     return 0

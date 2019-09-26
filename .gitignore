@@ -2,6 +2,7 @@
 __pycache__/
 aws-lambda-py3.6-pandas-numpy/
 lambda.zip
-numpy/
+numpy*
 pandas/
 pytz/
+
