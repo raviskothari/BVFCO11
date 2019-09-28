@@ -1,14 +1,15 @@
 import datetime as dt
-from datetime import datetime
+import logging
 import time
+from datetime import datetime
+from io import StringIO
+
 import boto3
 import holidays
+from boto3.dynamodb.conditions import Key
 
 import pandas as pd
-from io import StringIO
-from Standby import Standby
-from boto3.dynamodb.conditions import Key
-import logging
+from ReportGeneration.Models.Standby import Standby
 
 # S3 credentials
 
